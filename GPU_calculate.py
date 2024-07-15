@@ -9,7 +9,7 @@ import random
 
 seed = 111111
 E = 2.1 * 1e9  # 杨氏模量
-beta = 1.0 * 1e8
+beta = 1.0 * 1e7
 mu = 0.3  # 泊松比
 
 # 设置随机种子
@@ -44,9 +44,8 @@ class PINN(nn.Module):
         self.fc1 = nn.Linear(2, 20)  # 输入层到隐藏层
         self.fc2 = nn.Linear(20, 20)  # 隐藏层到隐藏层
         self.fc3 = nn.Linear(20, 20)  # 隐藏层到隐藏层
-        self.fc4 = nn.Linear(20, 20)  # 隐藏层到隐藏层
-        self.fc5 = nn.Linear(20, 20)  # 隐藏层到隐藏层
-        self.fc6 = nn.Linear(20, 5)  # 隐藏层到输出层，输出5个分量：两个位移分量和三个应力分量
+        self.fc4 = nn.Linear(20, 40)  # 隐藏层到隐藏层
+        self.fc5 = nn.Linear(40, 5)  # 隐藏层到输出层，输出5个分量：两个位移分量和三个应力分量
 
         self.swish = Swish()
         self.tanh = nn.Tanh()
@@ -60,10 +59,9 @@ class PINN(nn.Module):
     def forward(self, x):
         x = self.tanh(self.fc1(x))  # 激活函数
         x = self.tanh(self.fc2(x))  # 激活函数
-        x = self.tanh(self.fc3(x))  # 激活函数
-        x = self.tanh(self.fc4(x))  # 激活函数
-        x = self.sigmoid(self.fc5(x))  # 激活函数
-        x = self.fc6(x)  # 输出层
+        x = self.swish(self.fc3(x))  # 激活函数
+        x = self.swish(self.fc4(x))  # 激活函数
+        x = self.fc5(x)  # 输出层
 
         x[:, 0] = x[:, 0] / beta
         x[:, 1] = x[:, 1] / beta
@@ -203,8 +201,8 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
            100 * torch.mean((fxy_x + fyy_y) ** 2))
 
     loss_calculate_balence_without_f \
-        = (torch.mean((fxx_x_cal + fxy_x_cal) ** 2 - (fxx_x + fxy_y) ** 2) +
-           100 * torch.mean((fxy_x_cal + fyy_y_cal) ** 2 - (fxy_x + fyy_y) ** 2))
+        = (torch.mean(((fxx_x_cal + fxy_x_cal) - (fxx_x + fxy_y)) ** 2) +
+           100 * torch.mean(((fxy_x_cal + fyy_y_cal) - (fxy_x + fyy_y)) ** 2))
 
     #  右端载荷损失
     x_interior_right = normalize_data(x_interior_right)
@@ -213,48 +211,68 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
     sigma_xx_pred_right, sigma_yy_pred_right, sigma_xy_pred_right \
         = pred_right[:, 2], pred_right[:, 3], pred_right[:, 4]
 
+    sigma_xx_cal_right, sigma_yy_cal_right, sigma_xy_cal_right \
+        = calculate_sigma(pred_right[:, 0], pred_right[:, 1], x_interior_right)
+
     fxx_x_right, fxy_x_right, fxy_y_right, fyy_y_right\
         = calculate_f(sigma_xx_pred_right, sigma_yy_pred_right,
                       sigma_xy_pred_right, x_interior_right)
 
+    fxx_x_cal_right, fxy_x_cal_right, fxy_y_cal_right, fyy_y_cal_right \
+        = calculate_f(sigma_xx_cal_right, sigma_yy_cal_right,
+                      sigma_xy_cal_right, x_interior_right)
+
     balence_F_loss = (torch.mean((fxx_x_right + fxy_y_right - y_boundary[:, 0]) ** 2)+
                       torch.mean((fxy_x_right + fyy_y_right - y_boundary[:, 1]) ** 2))
+
+    loss_calculate_balence_F_right \
+        = (torch.mean(((fxx_x_cal_right + fxy_y_cal_right) - (fxx_x_right - fxy_y_right)) ** 2) +
+           torch.mean(((fxy_x_cal_right + fyy_y_cal_right) - (fxy_x_right - fyy_y_right)) ** 2))
+
 
     x_boundary_fixed = normalize_data(x_boundary_fixed)
     fixed_pred = model(x_boundary_fixed)
     fixed_pred.requires_grad_(True)
 
     # 固定端条件损失
-    u_pred_fixed = normalize_to_01(fixed_pred[:, 0])
-    v_pred_fixed = normalize_to_01(fixed_pred[:, 1])
+    # u_pred_fixed = normalize_to_01(fixed_pred[:, 0])
+    # v_pred_fixed = normalize_to_01(fixed_pred[:, 1])
+    u_pred_fixed = fixed_pred[:, 0] * beta
+    v_pred_fixed = fixed_pred[:, 1] * beta
 
     fixed_loss = (torch.mean((u_pred_fixed) ** 2) +
                   torch.mean((v_pred_fixed) ** 2))
 
+    fixed_cal_sigma_xx, fixed_cal_sigma_yy, fixed_cal_sigma_xy \
+        = calculate_sigma(fixed_pred[:, 0], fixed_pred[:, 1], x_boundary_fixed)
+
     fixed_fxx_x, fixed_fxy_x, fixed_fxy_y, fixed_fyy_y \
         = calculate_f(fixed_pred[:, 2], fixed_pred[:, 3],
                       fixed_pred[:, 4], x_boundary_fixed)
+
+    fixed_fxx_x_cal, fixed_fxy_x_cal, fixed_fxy_y_cal, fixed_fyy_y_cal \
+        = calculate_f(fixed_cal_sigma_xx, fixed_cal_sigma_yy,
+                      fixed_cal_sigma_xy, x_boundary_fixed)
 
     loss_fixed_f = ((torch.sum(fixed_fxy_x + fixed_fyy_y) -
                      torch.sum(y_boundary[:, 1])) ** 2 +
                     (torch.sum(fixed_fxx_x + fixed_fxy_y) -
                      torch.sum(y_boundary[:, 0])) ** 2)
 
-
+    loss_calculate_fixed_f \
+        = (torch.mean(((fixed_fxx_x_cal + fixed_fxy_y_cal) - (fixed_fxx_x - fixed_fxy_y)) ** 2) +
+           torch.mean(((fixed_fxy_x_cal + fixed_fyy_y_cal) - (fixed_fxy_x - fixed_fyy_y)) ** 2))
 
     sigma_loss = (torch.sum(torch.clamp(sigma_xx_pred, max=0.0) ** 2) +
-                  torch.sum(torch.clamp(sigma_xy_pred, max=0.0) ** 2) +
-                  torch.sum(torch.clamp(sigma_yy_pred, max=0.0) ** 2) +
-                  torch.sum(torch.clamp(sigma_xx, max=0.0) ** 2) +
-                  torch.sum(torch.clamp(sigma_xy, max=0.0) ** 2) +
-                  torch.sum(torch.clamp(sigma_yy, max=0.0) ** 2))
+                  torch.sum(torch.clamp(sigma_xx, max=0.0) ** 2))
 
-    loss_calculate = loss_calculate_balence_without_f
+    loss_calculate = loss_calculate_balence_without_f + loss_calculate_fixed_f + loss_calculate_balence_F_right
 
     lambda_balence = 1  # 平衡方程条件权重
     lambda_fixed = 1  # 固定端边界条件权重
     lambda_BC = 1  # 应力边界条件权重
     lambda_phy = 1  # 本构条件权重
+    lambda_calculate = 1e-5  # 通过位移计算平衡方程和通过应力计算平衡方程中的各项损失
 
     PINN_loss = (lambda_balence * balence_without_F_loss +
                  lambda_fixed * fixed_loss +
@@ -262,7 +280,7 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
                  1e-5 * loss_fixed_f +
                  lambda_phy * phy_loss +
                  sigma_loss +
-                 1e-4 * loss_calculate)
+                 lambda_calculate * loss_calculate)
 
     return (PINN_loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss,
             sigma_loss, loss_fixed_f, loss_calculate)
