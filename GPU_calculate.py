@@ -41,12 +41,12 @@ class Softplus(nn.Module):
 class PINN(nn.Module):
     def __init__(self):
         super(PINN, self).__init__()
-        self.fc1 = nn.Linear(2, 20)  # 输入层到隐藏层
-        self.fc2 = nn.Linear(20, 20)  # 隐藏层到隐藏层
-        self.fc3 = nn.Linear(20, 20)  # 隐藏层到隐藏层
-        self.fc4 = nn.Linear(20, 40)  # 隐藏层到隐藏层
-        self.fc5 = nn.Linear(40, 40)  # 隐藏层到隐藏层
-        self.fc6 = nn.Linear(40, 5)  # 隐藏层到输出层，输出5个分量：两个位移分量和三个应力分量
+        self.fc1 = nn.Linear(2, 60)  # 输入层到隐藏层
+        self.fc2 = nn.Linear(60, 60)  # 隐藏层到隐藏层
+        self.fc3 = nn.Linear(60, 60)  # 隐藏层到隐藏层
+        self.fc4 = nn.Linear(60, 60)  # 隐藏层到隐藏层
+        self.fc5 = nn.Linear(60, 60)  # 隐藏层到隐藏层
+        self.fc6 = nn.Linear(60, 5)  # 隐藏层到输出层，输出5个分量：两个位移分量和三个应力分量
 
         self.swish = Swish()
         self.tanh = nn.Tanh()
@@ -58,13 +58,14 @@ class PINN(nn.Module):
         self._initialize_weights()
 
     def forward(self, x):
-        x = self.tanh(self.fc1(x))  # 激活函数
-        x = self.tanh(self.fc2(x))  # 激活函数
-        x = self.swish(self.fc3(x))  # 激活函数
-        x = self.swish(self.fc4(x))  # 激活函数
-        x = self.swish(self.fc5(x))  # 激活函数
+        x = self.softplus(self.fc1(x))  # 激活函数
+        x = self.softplus(self.fc2(x))  # 激活函数
+        x = self.softplus(self.fc3(x))  # 激活函数
+        x = self.softplus(self.fc4(x))  # 激活函数
+        x = self.softplus(self.fc5(x))  # 激活函数
         x = self.fc6(x)  # 输出层
 
+        # 输出进行一个线性激活
         x[:, 0] = x[:, 0] / beta
         x[:, 1] = x[:, 1] / beta
 
@@ -215,9 +216,7 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
     sigma_xx_pred_up_down, sigma_yy_pred_up_down, sigma_xy_pred_up_down \
         = pred_up_down[:, 2], pred_up_down[:, 3], pred_up_down[:, 4]
 
-    balence_up_down_F_loss = (torch.mean((sigma_xx_pred_up_down) ** 2) +
-                              torch.mean((sigma_yy_pred_up_down) ** 2) +
-                              torch.mean((sigma_xy_pred_up_down) ** 2))
+    balence_up_down_F_loss = torch.mean((sigma_yy_pred_up_down) ** 2)
 
     # 固定端条件损失
     x_boundary_fixed = normalize_data(x_boundary_fixed)
@@ -507,10 +506,10 @@ def plot_results(model, loss_history):
     plt.show()
 
 if __name__ == "__main__":
-    num_phi_train = 1000  # 总加点个数
+    num_phi_train = 2000  # 总加点个数
     n = 1  # 加点轮次
-    maxiters = 30000  # 总共训练的次数
-    step = 100  # 定义边界加点个数
+    maxiters = 10000  # 总共训练的次数
+    step = 200  # 定义边界加点个数
 
     start_time = time.time()
     model, loss_history = train(maxiters, n, num_phi_train, step)  # 传递step参数
