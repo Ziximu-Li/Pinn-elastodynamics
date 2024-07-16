@@ -58,11 +58,11 @@ class PINN(nn.Module):
         self._initialize_weights()
 
     def forward(self, x):
-        x = self.relu(self.fc1(x))  # 激活函数
-        x = self.relu(self.fc2(x))  # 激活函数
-        x = self.relu(self.fc3(x))  # 激活函数
-        x = self.relu(self.fc4(x))  # 激活函数
-        x = self.relu(self.fc5(x))  # 激活函数
+        x = self.sigmoid(self.fc1(x))  # 激活函数
+        x = self.sigmoid(self.fc2(x))  # 激活函数
+        x = self.sigmoid(self.fc3(x))  # 激活函数
+        x = self.sigmoid(self.fc4(x))  # 激活函数
+        x = self.sigmoid(self.fc5(x))  # 激活函数
         x = self.fc6(x)  # 输出层
 
         # 输出进行一个线性激活
@@ -78,6 +78,7 @@ class PINN(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)  # 初始化偏置为0
 
+# 待试验：先对输入归一[-1,1]，后再在损失函数部分输出的结果处反归一？
 def normalize_data(data):
     data_normalized = data.clone()  # 先克隆数据，避免在原始数据上进行in-place操作
     # data_normalized[:, 0] = data_normalized[:, 0] / 10 - 1.0
