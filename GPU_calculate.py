@@ -58,11 +58,11 @@ class PINN(nn.Module):
         self._initialize_weights()
 
     def forward(self, x):
-        x = self.softplus(self.fc1(x))  # 激活函数
-        x = self.softplus(self.fc2(x))  # 激活函数
-        x = self.softplus(self.fc3(x))  # 激活函数
-        x = self.softplus(self.fc4(x))  # 激活函数
-        x = self.softplus(self.fc5(x))  # 激活函数
+        x = self.relu(self.fc1(x))  # 激活函数
+        x = self.relu(self.fc2(x))  # 激活函数
+        x = self.relu(self.fc3(x))  # 激活函数
+        x = self.relu(self.fc4(x))  # 激活函数
+        x = self.relu(self.fc5(x))  # 激活函数
         x = self.fc6(x)  # 输出层
 
         # 输出进行一个线性激活
