@@ -9,7 +9,7 @@ import random
 
 seed = 111111
 E = 2.1 * 1e9  # 杨氏模量
-beta = 1.0 * 1e7
+beta = 1.0 * 1e8
 mu = 0.3  # 泊松比
 
 # 设置随机种子
@@ -45,7 +45,8 @@ class PINN(nn.Module):
         self.fc2 = nn.Linear(20, 20)  # 隐藏层到隐藏层
         self.fc3 = nn.Linear(20, 20)  # 隐藏层到隐藏层
         self.fc4 = nn.Linear(20, 40)  # 隐藏层到隐藏层
-        self.fc5 = nn.Linear(40, 5)  # 隐藏层到输出层，输出5个分量：两个位移分量和三个应力分量
+        self.fc5 = nn.Linear(40, 40)  # 隐藏层到隐藏层
+        self.fc6 = nn.Linear(40, 5)  # 隐藏层到输出层，输出5个分量：两个位移分量和三个应力分量
 
         self.swish = Swish()
         self.tanh = nn.Tanh()
@@ -61,7 +62,8 @@ class PINN(nn.Module):
         x = self.tanh(self.fc2(x))  # 激活函数
         x = self.swish(self.fc3(x))  # 激活函数
         x = self.swish(self.fc4(x))  # 激活函数
-        x = self.fc5(x)  # 输出层
+        x = self.swish(self.fc5(x))  # 激活函数
+        x = self.fc6(x)  # 输出层
 
         x[:, 0] = x[:, 0] / beta
         x[:, 1] = x[:, 1] / beta
@@ -77,15 +79,11 @@ class PINN(nn.Module):
 
 def normalize_data(data):
     data_normalized = data.clone()  # 先克隆数据，避免在原始数据上进行in-place操作
-    data_normalized[:, 0] = data_normalized[:, 0] / 10 - 1.0
-    data_normalized[:, 1] = data_normalized[:, 1] / 2.5 - 1.0
+    # data_normalized[:, 0] = data_normalized[:, 0] / 10 - 1.0
+    # data_normalized[:, 1] = data_normalized[:, 1] / 2.5 - 1.0
+    data_normalized[:, 0] = data_normalized[:, 0] - 10
+    data_normalized[:, 1] = data_normalized[:, 1] - 2.5
 
-    return data_normalized
-
-def normalize_to_01(data):
-    data_min = data.min()
-    data_max = data.max()
-    data_normalized = (data - data_min) / (data_max - data_min + 1e-11)  # 加上一个小的常数以避免除零
     return data_normalized
 
 def generate_BC_training_data(length, height, step):
@@ -166,6 +164,10 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
     x_interior_right = x_boundary[2*step-4:,]
     x_interior_right.requires_grad_(True)
 
+    # 上下边界点，边界应力为0
+    x_boundary_up_down = x_boundary[: 2*step-4,]
+    x_boundary_up_down.requires_grad_(True)
+
     # 计算PDE损失
     x_interior_loss_total = normalize_data(x_interior_loss_total)
     pred = model(x_interior_loss_total)
@@ -174,35 +176,22 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
 
     sigma_xx, sigma_yy, sigma_xy = calculate_sigma(u_pred, v_pred, x_interior_loss_total)
 
+    # 本构方程
     phy_loss = (torch.mean((sigma_xx_pred - sigma_xx) ** 2) + \
                         torch.mean((sigma_xy_pred - sigma_xy) ** 2) + \
                         torch.mean((sigma_yy_pred - sigma_yy) ** 2))
 
+    # 平衡方程损失
     x_interior_without_F = normalize_data(x_interior_without_F)
     pred_without_F = model(x_interior_without_F)
     u_pred_without_F, v_pred_without_F = pred_without_F[:, 0], pred_without_F[:, 1]
     sigma_xx_pred_without_F, sigma_yy_pred_without_F, sigma_xy_pred_without_F \
         = pred_without_F[:, 2], pred_without_F[:, 3], pred_without_F[:, 4]
 
-    sigma_xx_without_F, sigma_yy_without_F, sigma_xy_without_F = (
-        calculate_sigma(u_pred_without_F, v_pred_without_F, x_interior_without_F))
+    fxx_x, fxy_x, fxy_y, fyy_y = calculate_f(sigma_xx_pred_without_F, sigma_yy_pred_without_F,
+                                             sigma_xy_pred_without_F, x_interior_without_F)
 
-    fxx_x, fxy_x, fxy_y, fyy_y \
-        = calculate_f(sigma_xx_pred_without_F, sigma_yy_pred_without_F,
-                      sigma_xy_pred_without_F, x_interior_without_F)
-
-    fxx_x_cal, fxy_x_cal, fxy_y_cal, fyy_y_cal \
-        = calculate_f(sigma_xx_without_F, sigma_yy_without_F,
-                      sigma_xy_without_F, x_interior_without_F)
-
-    # 平衡方程损失
-    balence_without_F_loss \
-        = (torch.mean((fxx_x + fxy_y) ** 2) +
-           100 * torch.mean((fxy_x + fyy_y) ** 2))
-
-    loss_calculate_balence_without_f \
-        = (torch.mean(((fxx_x_cal + fxy_x_cal) - (fxx_x + fxy_y)) ** 2) +
-           100 * torch.mean(((fxy_x_cal + fyy_y_cal) - (fxy_x + fyy_y)) ** 2))
+    balence_without_F_loss = (torch.mean((fxx_x + fxy_y) ** 2) + torch.mean((fxy_x + fyy_y) ** 2))
 
     #  右端载荷损失
     x_interior_right = normalize_data(x_interior_right)
@@ -211,79 +200,61 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
     sigma_xx_pred_right, sigma_yy_pred_right, sigma_xy_pred_right \
         = pred_right[:, 2], pred_right[:, 3], pred_right[:, 4]
 
-    sigma_xx_cal_right, sigma_yy_cal_right, sigma_xy_cal_right \
-        = calculate_sigma(pred_right[:, 0], pred_right[:, 1], x_interior_right)
+    # fxx_x_right, fxy_x_right, fxy_y_right, fyy_y_right\
+    #     = calculate_f(sigma_xx_pred_right, sigma_yy_pred_right,
+    #                   sigma_xy_pred_right, x_interior_right)
 
-    fxx_x_right, fxy_x_right, fxy_y_right, fyy_y_right\
-        = calculate_f(sigma_xx_pred_right, sigma_yy_pred_right,
-                      sigma_xy_pred_right, x_interior_right)
+    balence_F_loss = (torch.mean((sigma_xx_pred_right - y_boundary[:, 0]) ** 2) +
+                      torch.mean((sigma_yy_pred_right - y_boundary[:, 1]) ** 2) +
+                      torch.mean((sigma_xy_pred_right - y_boundary[:, 1]) ** 2))
 
-    fxx_x_cal_right, fxy_x_cal_right, fxy_y_cal_right, fyy_y_cal_right \
-        = calculate_f(sigma_xx_cal_right, sigma_yy_cal_right,
-                      sigma_xy_cal_right, x_interior_right)
+    # 上下端应力损失
+    x_boundary_up_down = normalize_data(x_boundary_up_down)
+    pred_up_down = model(x_boundary_up_down)
 
-    balence_F_loss = (torch.mean((fxx_x_right + fxy_y_right - y_boundary[:, 0]) ** 2)+
-                      torch.mean((fxy_x_right + fyy_y_right - y_boundary[:, 1]) ** 2))
+    sigma_xx_pred_up_down, sigma_yy_pred_up_down, sigma_xy_pred_up_down \
+        = pred_up_down[:, 2], pred_up_down[:, 3], pred_up_down[:, 4]
 
-    loss_calculate_balence_F_right \
-        = (torch.mean(((fxx_x_cal_right + fxy_y_cal_right) - (fxx_x_right - fxy_y_right)) ** 2) +
-           torch.mean(((fxy_x_cal_right + fyy_y_cal_right) - (fxy_x_right - fyy_y_right)) ** 2))
+    balence_up_down_F_loss = (torch.mean((sigma_xx_pred_up_down) ** 2) +
+                              torch.mean((sigma_yy_pred_up_down) ** 2) +
+                              torch.mean((sigma_xy_pred_up_down) ** 2))
 
-
+    # 固定端条件损失
     x_boundary_fixed = normalize_data(x_boundary_fixed)
     fixed_pred = model(x_boundary_fixed)
     fixed_pred.requires_grad_(True)
 
-    # 固定端条件损失
     # u_pred_fixed = normalize_to_01(fixed_pred[:, 0])
     # v_pred_fixed = normalize_to_01(fixed_pred[:, 1])
-    u_pred_fixed = fixed_pred[:, 0] * beta
-    v_pred_fixed = fixed_pred[:, 1] * beta
+    u_pred_fixed = fixed_pred[:, 0] * beta * 10
+    v_pred_fixed = fixed_pred[:, 1] * beta * 10
 
     fixed_loss = (torch.mean((u_pred_fixed) ** 2) +
                   torch.mean((v_pred_fixed) ** 2))
 
-    fixed_cal_sigma_xx, fixed_cal_sigma_yy, fixed_cal_sigma_xy \
-        = calculate_sigma(fixed_pred[:, 0], fixed_pred[:, 1], x_boundary_fixed)
+    # fixed_fxx_x, fixed_fxy_x, fixed_fxy_y, fixed_fyy_y \
+    #     = calculate_f(fixed_pred[:, 2], fixed_pred[:, 3],
+    #                   fixed_pred[:, 4], x_boundary_fixed)
+    #
+    # loss_fixed_f = (torch.abs(torch.sum(fixed_fxy_x + fixed_fyy_y) - torch.sum(y_boundary[:, 1])) +
+    #                 torch.abs(torch.sum(fixed_fxx_x + fixed_fxy_y) - torch.sum(y_boundary[:, 0])))
 
-    fixed_fxx_x, fixed_fxy_x, fixed_fxy_y, fixed_fyy_y \
-        = calculate_f(fixed_pred[:, 2], fixed_pred[:, 3],
-                      fixed_pred[:, 4], x_boundary_fixed)
-
-    fixed_fxx_x_cal, fixed_fxy_x_cal, fixed_fxy_y_cal, fixed_fyy_y_cal \
-        = calculate_f(fixed_cal_sigma_xx, fixed_cal_sigma_yy,
-                      fixed_cal_sigma_xy, x_boundary_fixed)
-
-    loss_fixed_f = ((torch.sum(fixed_fxy_x + fixed_fyy_y) -
-                     torch.sum(y_boundary[:, 1])) ** 2 +
-                    (torch.sum(fixed_fxx_x + fixed_fxy_y) -
-                     torch.sum(y_boundary[:, 0])) ** 2)
-
-    loss_calculate_fixed_f \
-        = (torch.mean(((fixed_fxx_x_cal + fixed_fxy_y_cal) - (fixed_fxx_x - fixed_fxy_y)) ** 2) +
-           torch.mean(((fixed_fxy_x_cal + fixed_fyy_y_cal) - (fixed_fxy_x - fixed_fyy_y)) ** 2))
-
-    sigma_loss = (torch.sum(torch.clamp(sigma_xx_pred, max=0.0) ** 2) +
-                  torch.sum(torch.clamp(sigma_xx, max=0.0) ** 2))
-
-    loss_calculate = loss_calculate_balence_without_f + loss_calculate_fixed_f + loss_calculate_balence_F_right
+    # 强制性使得横向位移为正
+    uv_loss = (torch.sum(torch.clamp(u_pred * beta, max=0.0) ** 2))
 
     lambda_balence = 1  # 平衡方程条件权重
     lambda_fixed = 1  # 固定端边界条件权重
     lambda_BC = 1  # 应力边界条件权重
     lambda_phy = 1  # 本构条件权重
-    lambda_calculate = 1e-5  # 通过位移计算平衡方程和通过应力计算平衡方程中的各项损失
+    lambda_uv = 1
 
     PINN_loss = (lambda_balence * balence_without_F_loss +
                  lambda_fixed * fixed_loss +
-                 lambda_BC * balence_F_loss +
-                 1e-5 * loss_fixed_f +
+                 lambda_BC * (balence_F_loss + balence_up_down_F_loss) +
                  lambda_phy * phy_loss +
-                 sigma_loss +
-                 lambda_calculate * loss_calculate)
+                 lambda_uv * uv_loss)
 
-    return (PINN_loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss,
-            sigma_loss, loss_fixed_f, loss_calculate)
+    return (PINN_loss, balence_without_F_loss, fixed_loss, balence_F_loss + balence_up_down_F_loss, phy_loss, uv_loss)
 
 # 主训练过程
 def train(maxiters, n, num_phi_train, step):
@@ -323,8 +294,7 @@ def train(maxiters, n, num_phi_train, step):
 
             for epoch in range(steps_count):
                 optimizer.zero_grad()
-                (loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss,
-                 sigma_loss, loss_fixed_f, loss_calculate)\
+                loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss, uv_loss\
                     = loss_fn(model, step, x_interior_total,
                               x_boundary_fixed, y_boundary_fixed,
                               x_boundary, y_boundary)
@@ -335,15 +305,13 @@ def train(maxiters, n, num_phi_train, step):
                 loss_history.append(loss.item())
 
                 if epoch % num_print_epoch == 0:
-                    print(f'Iteration {i + 1}/{n}, Epoch {epoch}, \n'
+                    print(f'Iteration {i + 1}/{n}, Epoch {epoch}, '
                           f'Loss: {loss.item():.6f}, '
                           f'balence_without_F_loss: {balence_without_F_loss.item():.6f}, '
                           f'fixed_loss: {fixed_loss.item():.6f}, '
                           f'balence_F_loss: {balence_F_loss.item():.6f}, '
                           f'phy_loss: {phy_loss.item():.6f}, '
-                          f'sigma_loss: {sigma_loss.item():.6f}, '
-                          f'loss_fixed_f: {loss_fixed_f.item():.6f}, '
-                          f'loss_calculate: {loss_calculate.item():.6f}')
+                          f'uv_loss: {uv_loss.item():.6f} ')
 
         else:
             final_interior = num_phi_train - (n - 1) * train_interior
@@ -359,8 +327,7 @@ def train(maxiters, n, num_phi_train, step):
 
             def closure():
                 optimizer.zero_grad()
-                (loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss,
-                 sigma_loss, loss_calculate) \
+                loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss, sigma_loss \
                     = loss_fn(model, step, x_interior_total,
                               x_boundary_fixed, y_boundary_fixed,
                               x_boundary, y_boundary)
@@ -432,8 +399,8 @@ def plot_results(model, loss_history):
     fyy_y_calculate = torch.autograd.grad(calculate_sigma_yy, xy_tensor,
                                 grad_outputs=torch.ones_like(calculate_sigma_yy), create_graph=True)[0][:, 1]
 
-    U = (pred[:, 0]).reshape(1000, 1000).detach().cpu().numpy()
-    V = (pred[:, 1]).reshape(1000, 1000).detach().cpu().numpy()
+    U = pred[:, 0].reshape(1000, 1000).detach().cpu().numpy()
+    V = pred[:, 1].reshape(1000, 1000).detach().cpu().numpy()
     sigma_xx = pred[:, 2].reshape(1000, 1000).detach().cpu().numpy()
     sigma_yy = pred[:, 3].reshape(1000, 1000).detach().cpu().numpy()
     sigma_xy = pred[:, 4].reshape(1000, 1000).detach().cpu().numpy()
@@ -531,10 +498,10 @@ def plot_results(model, loss_history):
     plt.ylabel('Height')
     plt.show()
 
-    # 绘制损失函数曲线，从第1000次训练后开始
+    # 绘制损失函数曲线
     plt.figure()
     plt.plot(loss_history[:])
-    plt.title('Loss Function (After 1000 Iterations)')
+    plt.title('Loss Function')
     plt.xlabel('Iteration')
     plt.ylabel('Loss')
     plt.show()
