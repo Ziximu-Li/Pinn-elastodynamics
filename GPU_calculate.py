@@ -8,8 +8,8 @@ from torch.optim import LBFGS
 import random
 
 seed = 111111
-E = 2.1 * 1e9  # 杨氏模量
-beta = 1.0 * 1e8
+E = 2.1 * 1e5  # 杨氏模量
+beta = 1.0 * 1e4
 mu = 0.3  # 泊松比
 
 # 设置随机种子
@@ -79,6 +79,7 @@ class PINN(nn.Module):
                     nn.init.constant_(m.bias, 0)  # 初始化偏置为0
 
 # 待试验：先对输入归一[-1,1]，后再在损失函数部分输出的结果处反归一？
+# 如何将输出数据反归一？
 def normalize_data(data):
     data_normalized = data.clone()  # 先克隆数据，避免在原始数据上进行in-place操作
     # data_normalized[:, 0] = data_normalized[:, 0] / 10 - 1.0
@@ -87,6 +88,13 @@ def normalize_data(data):
     data_normalized[:, 1] = data_normalized[:, 1] - 2.5
 
     return data_normalized
+
+def renormalize_data(data):
+    data_renormalized = data.clone()  # 先克隆数据，避免在原始数据上进行in-place操作
+    data_renormalized[:, 0] = (data_renormalized[:, 0] + 1.0) * 10
+    data_renormalized[:, 1] = (data_renormalized[:, 1] + 1.0) * 2.5
+    return data_renormalized
+
 
 def generate_BC_training_data(length, height, step):
 
@@ -170,7 +178,7 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
     x_boundary_up_down = x_boundary[: 2*step-4,]
     x_boundary_up_down.requires_grad_(True)
 
-    # 计算PDE损失
+    # 计算损失
     x_interior_loss_total = normalize_data(x_interior_loss_total)
     pred = model(x_interior_loss_total)
     u_pred, v_pred = pred[:, 0], pred[:, 1]
@@ -178,7 +186,7 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
 
     sigma_xx, sigma_yy, sigma_xy = calculate_sigma(u_pred, v_pred, x_interior_loss_total)
 
-    # 本构方程
+    # 本构损失
     phy_loss = (torch.mean((sigma_xx_pred - sigma_xx) ** 2) + \
                         torch.mean((sigma_xy_pred - sigma_xy) ** 2) + \
                         torch.mean((sigma_yy_pred - sigma_yy) ** 2))
@@ -202,10 +210,6 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
     sigma_xx_pred_right, sigma_yy_pred_right, sigma_xy_pred_right \
         = pred_right[:, 2], pred_right[:, 3], pred_right[:, 4]
 
-    # fxx_x_right, fxy_x_right, fxy_y_right, fyy_y_right\
-    #     = calculate_f(sigma_xx_pred_right, sigma_yy_pred_right,
-    #                   sigma_xy_pred_right, x_interior_right)
-
     balence_F_loss = (torch.mean((sigma_xx_pred_right - y_boundary[:, 0]) ** 2) +
                       torch.mean((sigma_yy_pred_right - y_boundary[:, 1]) ** 2) +
                       torch.mean((sigma_xy_pred_right - y_boundary[:, 1]) ** 2))
@@ -217,7 +221,8 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
     sigma_xx_pred_up_down, sigma_yy_pred_up_down, sigma_xy_pred_up_down \
         = pred_up_down[:, 2], pred_up_down[:, 3], pred_up_down[:, 4]
 
-    balence_up_down_F_loss = torch.mean((sigma_yy_pred_up_down) ** 2)
+    balence_up_down_F_loss = (torch.mean((sigma_yy_pred_up_down) ** 2) +
+                              torch.mean((sigma_xy_pred_up_down) ** 2))
 
     # 固定端条件损失
     x_boundary_fixed = normalize_data(x_boundary_fixed)
@@ -231,13 +236,6 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
 
     fixed_loss = (torch.mean((u_pred_fixed) ** 2) +
                   torch.mean((v_pred_fixed) ** 2))
-
-    # fixed_fxx_x, fixed_fxy_x, fixed_fxy_y, fixed_fyy_y \
-    #     = calculate_f(fixed_pred[:, 2], fixed_pred[:, 3],
-    #                   fixed_pred[:, 4], x_boundary_fixed)
-    #
-    # loss_fixed_f = (torch.abs(torch.sum(fixed_fxy_x + fixed_fyy_y) - torch.sum(y_boundary[:, 1])) +
-    #                 torch.abs(torch.sum(fixed_fxx_x + fixed_fxy_y) - torch.sum(y_boundary[:, 0])))
 
     # 强制性使得横向位移为正
     uv_loss = (torch.sum(torch.clamp(u_pred * beta, max=0.0) ** 2))
