@@ -7,9 +7,9 @@ import torch.optim as optim
 from torch.optim import LBFGS
 import random
 
-seed = 123456 # 随机种子数
+seed = 111111
 E = 2.1 * 1e9  # 杨氏模量
-beta = 1.0 * 1e8 # 输出层对位移进行线性激活的乘子参数
+beta = 1.0 * 1e8
 mu = 0.3  # 泊松比
 
 # 设置随机种子
@@ -58,11 +58,11 @@ class PINN(nn.Module):
         self._initialize_weights()
 
     def forward(self, x):
-        x = self.tanh(self.fc1(x))  # 激活函数
-        x = self.tanh(self.fc2(x))  # 激活函数
-        x = self.tanh(self.fc3(x))  # 激活函数
-        x = self.tanh(self.fc4(x))  # 激活函数
-        x = self.tanh(self.fc5(x))  # 激活函数
+        x = self.sigmoid(self.fc1(x))  # 激活函数
+        x = self.sigmoid(self.fc2(x))  # 激活函数
+        x = self.sigmoid(self.fc3(x))  # 激活函数
+        x = self.sigmoid(self.fc4(x))  # 激活函数
+        x = self.sigmoid(self.fc5(x))  # 激活函数
         x = self.fc6(x)  # 输出层
 
         # 输出进行一个线性激活
@@ -71,17 +71,15 @@ class PINN(nn.Module):
 
         return x
 
-    # 网络权重参数初始化
     def _initialize_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight)  # 使用Xavier初始化权重w
+                nn.init.xavier_normal_(m.weight)  # 使用Xavier初始化权重
                 if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)  # 初始化偏置b为0
+                    nn.init.constant_(m.bias, 0)  # 初始化偏置为0
 
-# 问题：如果对输入直接归一为[-1,1]，结果就变为2*2的方形板施加边界载荷和位移约束
 # 待试验：先对输入归一[-1,1]，后再在损失函数部分输出的结果处反归一？
-# 问题：如何将输出数据反归一？
+# 如何将输出数据反归一？
 def normalize_data(data):
     data_normalized = data.clone()  # 先克隆数据，避免在原始数据上进行in-place操作
     data_normalized[:, 0] = data_normalized[:, 0] - 10
@@ -94,7 +92,6 @@ def renormalize_data(data):
     data_renormalized[:, 1] = (data_renormalized[:, 1] + 1.0) * 2.5
     return data_renormalized
 
-# 边界条件
 def generate_BC_training_data(length, height, step):
     # 固定端边界条件 (x = 0)    length = 20, height = 5, step = 200
     x_boundary_fixed = torch.zeros((step, 2), device=device)  # 边界坐标点
@@ -116,7 +113,6 @@ def generate_BC_training_data(length, height, step):
 
     return x_boundary_fixed, y_boundary_fixed, x_boundary, y_boundary
 
-# 根据位移计算应力
 def calculate_sigma(u_pred, v_pred, x_interior):
     # 几何方程
     u_x = torch.autograd.grad(u_pred, x_interior, grad_outputs=torch.ones_like(u_pred), create_graph=True)[0][:, 0]
@@ -141,7 +137,6 @@ def calculate_sigma(u_pred, v_pred, x_interior):
 
     return sigma_xx, sigma_yy, sigma_xy
 
-# 根据应力计算平衡方程的df/dx
 def calculate_f(sigma_xx, sigma_yy, sigma_xy, x_interior):
     fxx_x = torch.autograd.grad(sigma_xx, x_interior, grad_outputs=torch.ones_like(sigma_xx), create_graph=True)[0][:, 0]
     fxy_x = torch.autograd.grad(sigma_xy, x_interior, grad_outputs=torch.ones_like(sigma_xy), create_graph=True)[0][:, 0]
@@ -176,7 +171,7 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
 
     sigma_xx, sigma_yy, sigma_xy = calculate_sigma(u_pred, v_pred, x_interior_loss_total)
 
-    # 本构计算损失（输出的位移和应变之间构建联系）
+    # 本构损失
     phy_loss = (torch.mean((sigma_xx_pred - sigma_xx) ** 2) +
                 torch.mean((sigma_xy_pred - sigma_xy) ** 2) +
                 torch.mean((sigma_yy_pred - sigma_yy) ** 2))
@@ -192,7 +187,7 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
 
     balence_without_F_loss = (torch.mean((fxx_x + fxy_y) ** 2) + torch.mean((fxy_x + fyy_y) ** 2))
 
-    #  右端载荷损失
+    # 右端载荷损失
     x_interior_right = normalize_data(x_interior_right)
     pred_right = model(x_interior_right)
     sigma_xx_pred_right, sigma_yy_pred_right, sigma_xy_pred_right = pred_right[:, 2], pred_right[:, 3], pred_right[:, 4]
@@ -213,7 +208,6 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
     fixed_pred = model(x_boundary_fixed)
     fixed_pred.requires_grad_(True)
 
-    # 因为位移量级很小，所以引入一个大数乘子（待尝试获得当前最大位移，做分母（相对误差））
     u_pred_fixed = fixed_pred[:, 0] * beta
     v_pred_fixed = fixed_pred[:, 1] * beta
 
@@ -224,9 +218,9 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
 
     lambda_balence = 1  # 平衡方程条件权重
     lambda_fixed = 1  # 固定端边界条件权重
-    lambda_BC = 1  # 应力边界条件权重
-    lambda_phy = 1  # 本构条件权重
-    lambda_uv = 1 # 强制性横向位移为正
+    lambda_BC = 0.1  # 应力边界条件权重
+    lambda_phy = 0.01  # 本构条件权重
+    lambda_uv = 1 # 强制横向位移为正
 
     PINN_loss = (lambda_balence * balence_without_F_loss +
                  lambda_fixed * fixed_loss +
@@ -272,54 +266,55 @@ def train(maxiters, n, num_phi_train, step):
             x_interior_total.requires_grad_(True)
 
             for epoch in range(steps_count):
-                optimizer.zero_grad()
-                loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss, uv_loss = \
-                    loss_fn(model, step, x_interior_total,
-                            x_boundary_fixed, y_boundary_fixed,
-                            x_boundary, y_boundary)
-                loss.backward(retain_graph=True)
-                nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # 梯度裁剪
-                optimizer.step()
+                if epoch < steps_count:
+                    optimizer.zero_grad()
+                    loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss, uv_loss = \
+                        loss_fn(model, step, x_interior_total,
+                                x_boundary_fixed, y_boundary_fixed,
+                                x_boundary, y_boundary)
+                    loss.backward(retain_graph=True)
+                    nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # 梯度裁剪
+                    optimizer.step()
 
-                loss_history.append(loss.item())
+                    loss_history.append(loss.item())
 
-                if epoch % num_print_epoch == 0:
-                    print(f'Iteration {i + 1}/{n}, Epoch {epoch}, '
-                          f'Loss: {loss.item():.6f}, '
-                          f'balence_without_F_loss: {balence_without_F_loss.item():.6f}, '
-                          f'fixed_loss: {fixed_loss.item():.6f}, '
-                          f'balence_F_loss: {balence_F_loss.item():.6f}, '
-                          f'phy_loss: {phy_loss.item():.6f}, '
-                          f'uv_loss: {uv_loss.item():.6f}')
+                    if epoch % num_print_epoch == 0:
+                        print(f'Iteration {i + 1}/{n}, Epoch {epoch}, '
+                              f'Loss: {loss.item():.6f}, '
+                              f'balence_without_F_loss: {balence_without_F_loss.item():.6f}, '
+                              f'fixed_loss: {fixed_loss.item():.6f}, '
+                              f'balence_F_loss: {balence_F_loss.item():.6f}, '
+                              f'phy_loss: {phy_loss.item():.6f}, '
+                              f'uv_loss: {uv_loss.item():.6f}')
 
-        else:
-            final_interior = num_phi_train - (n - 1) * train_interior
-            x_interior = torch.rand((final_interior, 2), device=device)  # 随机生成内部点
-            x_interior[:, 0] *= length
-            x_interior[:, 1] *= height
-            x_interior.requires_grad_(True)
+                else:
+                    final_interior = num_phi_train - (n - 1) * train_interior
+                    x_interior = torch.rand((final_interior, 2), device=device)  # 随机生成内部点
+                    x_interior[:, 0] *= length
+                    x_interior[:, 1] *= height
+                    x_interior.requires_grad_(True)
 
-            x_interior_total = torch.cat((x_interior_total, x_interior), dim=0)  # 将新生成的点加入总的内部点集合
-            x_interior_total.requires_grad_(True)
+                    x_interior_total = torch.cat((x_interior_total, x_interior), dim=0)  # 将新生成的点加入总的内部点集合
+                    x_interior_total.requires_grad_(True)
 
-            optimizer = LBFGS(model.parameters(), lr=0.001, max_iter=1000, history_size=50, line_search_fn='strong_wolfe')  # 最后一轮使用LBFGS优化器
+                    optimizer = LBFGS(model.parameters(), lr=0.001, max_iter=1000, history_size=50,
+                                      line_search_fn='strong_wolfe')  # 最后一轮使用LBFGS优化器
 
-            def closure():
-                optimizer.zero_grad()
-                loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss, uv_loss = \
-                    loss_fn(model, step, x_interior_total,
-                            x_boundary_fixed, y_boundary_fixed,
-                            x_boundary, y_boundary)
-                loss.backward()
-                return loss
+                    def closure():
+                        optimizer.zero_grad()
+                        loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss, uv_loss = \
+                            loss_fn(model, step, x_interior_total,
+                                    x_boundary_fixed, y_boundary_fixed,
+                                    x_boundary, y_boundary)
+                        loss.backward()
+                        return loss
 
-            for epoch in range(int(steps_count / 2)):
-                loss = optimizer.step(closure)  # LBFGS优化
+                    loss = optimizer.step(closure)  # LBFGS优化
 
-                loss_history.append(loss.item())
+                    loss_history.append(loss.item())
 
-                if epoch % num_print_epoch == 0:
-                    print(f'Iteration {i + 1}/{n}, Epoch {epoch}, Loss: {loss.item():.5f}')
+                    if epoch * 10 % num_print_epoch == 0:
+                        print(f'Iteration {i + 1}/{n}, Epoch {epoch}, Loss: {loss.item():.5f}')
 
         step_train_time = time.time() - step_train_start_time
         print(f'Step {i + 1}/{n}, Time Elapsed: {step_train_time:.2f}s')
@@ -333,7 +328,7 @@ def plot_results(model, loss_history):
     X, Y = np.meshgrid(x, y)
 
     xy = np.hstack((X.flatten()[:, None], Y.flatten()[:, None]))
-    xy_tensor = torch.tensor(xy, dtype=torch.float32, requires_grad=True, device=device)
+    xy_tensor = torch.tensor(xy, dtype=torch.float32, requires_grad=True).to(device)
     xy_tensor = normalize_data(xy_tensor)
     pred = model(xy_tensor)
     U = pred[:, 0]
@@ -477,10 +472,10 @@ def plot_results(model, loss_history):
     plt.show()
 
 if __name__ == "__main__":
-    num_phi_train = 5000  # 总加点个数
+    num_phi_train = 1000  # 总加点个数
     n = 1  # 加点轮次
     maxiters = 10000  # 总共训练的次数
-    step = 500  # 定义边界加点个数
+    step = 200  # 定义边界加点个数
 
     start_time = time.time()
     model, loss_history = train(maxiters, n, num_phi_train, step)  # 传递step参数
