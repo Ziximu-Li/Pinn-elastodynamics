@@ -231,9 +231,10 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
     return (PINN_loss, balence_without_F_loss, fixed_loss, balence_F_loss + balence_up_down_F_loss, phy_loss, uv_loss)
 
 # 主训练过程
+# 主训练过程
 def train(maxiters, n, num_phi_train, step):
     model = PINN().to(device)  # 初始化PINN模型并移动到GPU
-    optimizer = optim.Adam(model.parameters(), lr=0.0001)  # 使用Adam优化器
+    optimizer = optim.Adam(model.parameters(), lr=0.001)  # 使用Adam优化器
     loss_history = []
 
     steps_count = maxiters // n  # 每次加点训练的次数
@@ -266,7 +267,7 @@ def train(maxiters, n, num_phi_train, step):
             x_interior_total.requires_grad_(True)
 
             for epoch in range(steps_count):
-                if epoch < steps_count:
+                if epoch < steps_count * 0.99 + 1:
                     optimizer.zero_grad()
                     loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss, uv_loss = \
                         loss_fn(model, step, x_interior_total,
@@ -288,17 +289,9 @@ def train(maxiters, n, num_phi_train, step):
                               f'uv_loss: {uv_loss.item():.6f}')
 
                 else:
-                    final_interior = num_phi_train - (n - 1) * train_interior
-                    x_interior = torch.rand((final_interior, 2), device=device)  # 随机生成内部点
-                    x_interior[:, 0] *= length
-                    x_interior[:, 1] *= height
-                    x_interior.requires_grad_(True)
-
-                    x_interior_total = torch.cat((x_interior_total, x_interior), dim=0)  # 将新生成的点加入总的内部点集合
-                    x_interior_total.requires_grad_(True)
-
-                    optimizer = LBFGS(model.parameters(), lr=0.001, max_iter=1000, history_size=50,
-                                      line_search_fn='strong_wolfe')  # 最后一轮使用LBFGS优化器
+                    optimizer = LBFGS(model.parameters(), lr=0.01, max_iter=20000, history_size=50,
+                                      tolerance_grad=0.00001 * np.finfo(float).eps,
+                                      tolerance_change=0.00001 * np.finfo(float).eps)  # 使用LBFGS优化器
 
                     def closure():
                         optimizer.zero_grad()
@@ -320,6 +313,7 @@ def train(maxiters, n, num_phi_train, step):
         print(f'Step {i + 1}/{n}, Time Elapsed: {step_train_time:.2f}s')
 
     return model, loss_history
+
 
 # 绘制最终应力和位移云图
 def plot_results(model, loss_history):
