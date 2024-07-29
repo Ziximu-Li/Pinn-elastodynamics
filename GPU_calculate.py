@@ -58,11 +58,11 @@ class PINN(nn.Module):
         self._initialize_weights()
 
     def forward(self, x):
-        x = self.sigmoid(self.fc1(x))  # 激活函数
-        x = self.sigmoid(self.fc2(x))  # 激活函数
-        x = self.sigmoid(self.fc3(x))  # 激活函数
-        x = self.sigmoid(self.fc4(x))  # 激活函数
-        x = self.sigmoid(self.fc5(x))  # 激活函数
+        x = self.swish(self.fc1(x))  # 激活函数
+        x = self.swish(self.fc2(x))  # 激活函数
+        x = self.swish(self.fc3(x))  # 激活函数
+        x = self.swish(self.fc4(x))  # 激活函数
+        x = self.swish(self.fc5(x))  # 激活函数
         x = self.fc6(x)  # 输出层
 
         # 输出进行一个线性激活
@@ -146,7 +146,7 @@ def calculate_f(sigma_xx, sigma_yy, sigma_xy, x_interior):
     return fxx_x, fxy_x, fxy_y, fyy_y
 
 # 定义损失函数，包含PDE损失和边界条件损失
-def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_boundary, y_boundary):
+def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_boundary, y_boundary, epoch):
     # 将边界点加入内部点中，保证边界点同样满足弹性力学本构方程
     x_interior_loss_total = torch.cat((x_interior, x_boundary_fixed, x_boundary), dim=0)
     x_interior_loss_total.requires_grad_(True)
@@ -228,6 +228,15 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
                  lambda_phy * phy_loss +
                  lambda_uv * uv_loss)
 
+    # if epoch > 10000 * 0.999 + 1:
+    #     print(f'Iteration {epoch + 1}/{n}, Epoch {epoch}, '
+    #           f'Loss: {PINN_loss.item():.6f}, '
+    #           f'balence_without_F_loss: {balence_without_F_loss.item():.6f}, '
+    #           f'fixed_loss: {fixed_loss.item():.6f}, '
+    #           f'balence_F_loss: {balence_F_loss + balence_up_down_F_loss.item():.6f}, '
+    #           f'phy_loss: {phy_loss.item():.6f}, '
+    #           f'uv_loss: {uv_loss.item():.6f}')
+
     return (PINN_loss, balence_without_F_loss, fixed_loss, balence_F_loss + balence_up_down_F_loss, phy_loss, uv_loss)
 
 # 主训练过程
@@ -267,12 +276,12 @@ def train(maxiters, n, num_phi_train, step):
             x_interior_total.requires_grad_(True)
 
             for epoch in range(steps_count):
-                if epoch < steps_count * 0.99 + 1:
+                if epoch < steps_count * 0.999 + 1:
                     optimizer.zero_grad()
                     loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss, uv_loss = \
                         loss_fn(model, step, x_interior_total,
                                 x_boundary_fixed, y_boundary_fixed,
-                                x_boundary, y_boundary)
+                                x_boundary, y_boundary, epoch)
                     loss.backward(retain_graph=True)
                     nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # 梯度裁剪
                     optimizer.step()
@@ -289,16 +298,16 @@ def train(maxiters, n, num_phi_train, step):
                               f'uv_loss: {uv_loss.item():.6f}')
 
                 else:
-                    optimizer = LBFGS(model.parameters(), lr=0.01, max_iter=20000, history_size=50,
-                                      tolerance_grad=0.00001 * np.finfo(float).eps,
-                                      tolerance_change=0.00001 * np.finfo(float).eps)  # 使用LBFGS优化器
+                    optimizer = LBFGS(model.parameters(), lr=0.0001, max_iter=200, history_size=50,
+                                      tolerance_grad=0.0001 * np.finfo(float).eps,
+                                      tolerance_change=0.0001 * np.finfo(float).eps)  # 使用LBFGS优化器
 
                     def closure():
                         optimizer.zero_grad()
                         loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss, uv_loss = \
                             loss_fn(model, step, x_interior_total,
                                     x_boundary_fixed, y_boundary_fixed,
-                                    x_boundary, y_boundary)
+                                    x_boundary, y_boundary, epoch)
                         loss.backward()
                         return loss
 
@@ -306,8 +315,9 @@ def train(maxiters, n, num_phi_train, step):
 
                     loss_history.append(loss.item())
 
-                    if epoch * 10 % num_print_epoch == 0:
-                        print(f'Iteration {i + 1}/{n}, Epoch {epoch}, Loss: {loss.item():.5f}')
+                    # if epoch % num_print_epoch == 0:
+                    print(f'Iteration {i + 1}/{n}, Epoch {epoch}, Loss: {loss.item():.5f}')
+
 
         step_train_time = time.time() - step_train_start_time
         print(f'Step {i + 1}/{n}, Time Elapsed: {step_train_time:.2f}s')
@@ -353,11 +363,11 @@ def plot_results(model, loss_history):
     calculate_sigma_xx = (C11 * epsilon_xx + C12 * epsilon_yy)
     calculate_sigma_yy = (C12 * epsilon_xx + C11 * epsilon_yy)
     calculate_sigma_xy = (C33 * epsilon_xy)
-
-    fxx_x_calculate = torch.autograd.grad(calculate_sigma_xx, xy_tensor, grad_outputs=torch.ones_like(calculate_sigma_xx), create_graph=True)[0][:, 0]
-    fxy_x_calculate = torch.autograd.grad(calculate_sigma_xy, xy_tensor, grad_outputs=torch.ones_like(calculate_sigma_xy), create_graph=True)[0][:, 0]
-    fxy_y_calculate = torch.autograd.grad(calculate_sigma_xy, xy_tensor, grad_outputs=torch.ones_like(calculate_sigma_xy), create_graph=True)[0][:, 1]
-    fyy_y_calculate = torch.autograd.grad(calculate_sigma_yy, xy_tensor, grad_outputs=torch.ones_like(calculate_sigma_yy), create_graph=True)[0][:, 1]
+    #
+    # fxx_x_calculate = torch.autograd.grad(calculate_sigma_xx, xy_tensor, grad_outputs=torch.ones_like(calculate_sigma_xx), create_graph=True)[0][:, 0]
+    # fxy_x_calculate = torch.autograd.grad(calculate_sigma_xy, xy_tensor, grad_outputs=torch.ones_like(calculate_sigma_xy), create_graph=True)[0][:, 0]
+    # fxy_y_calculate = torch.autograd.grad(calculate_sigma_xy, xy_tensor, grad_outputs=torch.ones_like(calculate_sigma_xy), create_graph=True)[0][:, 1]
+    # fyy_y_calculate = torch.autograd.grad(calculate_sigma_yy, xy_tensor, grad_outputs=torch.ones_like(calculate_sigma_yy), create_graph=True)[0][:, 1]
 
     U = pred[:, 0].reshape(1000, 1000).detach().cpu().numpy()
     V = pred[:, 1].reshape(1000, 1000).detach().cpu().numpy()
@@ -374,10 +384,10 @@ def plot_results(model, loss_history):
     fxy_y = fxy_y.reshape(1000, 1000).detach().cpu().numpy()
     fyy_y = fyy_y.reshape(1000, 1000).detach().cpu().numpy()
 
-    fxx_x_calculate = fxx_x_calculate.reshape(1000, 1000).detach().cpu().numpy()
-    fxy_x_calculate = fxy_x_calculate.reshape(1000, 1000).detach().cpu().numpy()
-    fxy_y_calculate = fxy_y_calculate.reshape(1000, 1000).detach().cpu().numpy()
-    fyy_y_calculate = fyy_y_calculate.reshape(1000, 1000).detach().cpu().numpy()
+    # fxx_x_calculate = fxx_x_calculate.reshape(1000, 1000).detach().cpu().numpy()
+    # fxy_x_calculate = fxy_x_calculate.reshape(1000, 1000).detach().cpu().numpy()
+    # fxy_y_calculate = fxy_y_calculate.reshape(1000, 1000).detach().cpu().numpy()
+    # fyy_y_calculate = fyy_y_calculate.reshape(1000, 1000).detach().cpu().numpy()
 
     # 绘制位移云图 U
     plt.figure()
@@ -441,21 +451,21 @@ def plot_results(model, loss_history):
     plt.ylabel('Height')
     plt.show()
 
-    plt.figure()
-    plt.imshow(fxx_x_calculate + fxy_y_calculate, extent=(0, 20, 0, 5), origin='lower', cmap='jet')
-    plt.colorbar()
-    plt.title('fxx_x_calculate + fxy_y_calculate')
-    plt.xlabel('Length')
-    plt.ylabel('Height')
-    plt.show()
-
-    plt.figure()
-    plt.imshow(fxy_x_calculate + fyy_y_calculate, extent=(0, 20, 0, 5), origin='lower', cmap='jet')
-    plt.colorbar()
-    plt.title('fxy_x_calculate + fyy_y_calculate')
-    plt.xlabel('Length')
-    plt.ylabel('Height')
-    plt.show()
+    # plt.figure()
+    # plt.imshow(fxx_x_calculate + fxy_y_calculate, extent=(0, 20, 0, 5), origin='lower', cmap='jet')
+    # plt.colorbar()
+    # plt.title('fxx_x_calculate + fxy_y_calculate')
+    # plt.xlabel('Length')
+    # plt.ylabel('Height')
+    # plt.show()
+    #
+    # plt.figure()
+    # plt.imshow(fxy_x_calculate + fyy_y_calculate, extent=(0, 20, 0, 5), origin='lower', cmap='jet')
+    # plt.colorbar()
+    # plt.title('fxy_x_calculate + fyy_y_calculate')
+    # plt.xlabel('Length')
+    # plt.ylabel('Height')
+    # plt.show()
 
     # 绘制损失函数曲线
     plt.figure()
