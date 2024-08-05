@@ -218,8 +218,8 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
 
     lambda_balence = 1  # 平衡方程条件权重
     lambda_fixed = 1  # 固定端边界条件权重
-    lambda_BC = 0.1  # 应力边界条件权重
-    lambda_phy = 0.01  # 本构条件权重
+    lambda_BC = 1  # 应力边界条件权重
+    lambda_phy = 1  # 本构条件权重
     lambda_uv = 1 # 强制横向位移为正
 
     PINN_loss = (lambda_balence * balence_without_F_loss +
@@ -276,7 +276,7 @@ def train(maxiters, n, num_phi_train, step):
             x_interior_total.requires_grad_(True)
 
             for epoch in range(steps_count):
-                if epoch < steps_count * 0.999 + 1:
+                if epoch < steps_count * 0.99 + 1:
                     optimizer.zero_grad()
                     loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss, uv_loss = \
                         loss_fn(model, step, x_interior_total,
@@ -298,7 +298,7 @@ def train(maxiters, n, num_phi_train, step):
                               f'uv_loss: {uv_loss.item():.6f}')
 
                 else:
-                    optimizer = LBFGS(model.parameters(), lr=0.0001, max_iter=200, history_size=50,
+                    optimizer = LBFGS(model.parameters(), lr=0.0001, max_iter=500, history_size=50,
                                       tolerance_grad=0.0001 * np.finfo(float).eps,
                                       tolerance_change=0.0001 * np.finfo(float).eps)  # 使用LBFGS优化器
 
