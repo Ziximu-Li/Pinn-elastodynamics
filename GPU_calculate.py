@@ -84,6 +84,8 @@ def normalize_data(data):
     data_normalized = data.clone()  # 先克隆数据，避免在原始数据上进行in-place操作
     data_normalized[:, 0] = data_normalized[:, 0] - 10
     data_normalized[:, 1] = data_normalized[:, 1] - 2.5
+    # data_normalized[:, 0] = data_normalized[:, 0]
+    # data_normalized[:, 1] = data_normalized[:, 1]
     return data_normalized
 
 def renormalize_data(data):
@@ -276,7 +278,7 @@ def train(maxiters, n, num_phi_train, step):
             x_interior_total.requires_grad_(True)
 
             for epoch in range(steps_count):
-                if epoch < steps_count * 0.99 + 1:
+                if epoch < steps_count * 0.999 + 1:
                     optimizer.zero_grad()
                     loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss, uv_loss = \
                         loss_fn(model, step, x_interior_total,
@@ -315,8 +317,8 @@ def train(maxiters, n, num_phi_train, step):
 
                     loss_history.append(loss.item())
 
-                    # if epoch % num_print_epoch == 0:
-                    print(f'Iteration {i + 1}/{n}, Epoch {epoch}, Loss: {loss.item():.5f}')
+                    if epoch % num_print_epoch == 0:
+                        print(f'Iteration {i + 1}/{n}, Epoch {epoch}, Loss: {loss.item():.5f}')
 
 
         step_train_time = time.time() - step_train_start_time
