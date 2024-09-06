@@ -84,18 +84,23 @@ def normalize_data(data):
     data_normalized = data.clone()  # 先克隆数据，避免在原始数据上进行in-place操作
     data_normalized[:, 0] = data_normalized[:, 0] - 10
     data_normalized[:, 1] = data_normalized[:, 1] - 2.5
+    # data_normalized[:, :] = data_normalized[:, :] / 20
     # data_normalized[:, 0] = data_normalized[:, 0]
     # data_normalized[:, 1] = data_normalized[:, 1]
     return data_normalized
 
 def renormalize_data(data):
     data_renormalized = data.clone()  # 先克隆数据，避免在原始数据上进行in-place操作
-    data_renormalized[:, 0] = (data_renormalized[:, 0] + 1.0) * 10
-    data_renormalized[:, 1] = (data_renormalized[:, 1] + 1.0) * 2.5
+    # data_renormalized[:, 0] = (data_renormalized[:, 0] + 1.0) * 10
+    # data_renormalized[:, 1] = (data_renormalized[:, 1] + 1.0) * 2.5
+    # data_renormalized = data_renormalized[:, :] * 20
+    # data_renormalized[:, 0] = data_renormalized[:, 0] + 10
+    # data_renormalized[:, 1] = data_renormalized[:, 1] + 2.5
     return data_renormalized
 
 def generate_BC_training_data(length, height, step):
     # 固定端边界条件 (x = 0)    length = 20, height = 5, step = 200
+
     x_boundary_fixed = torch.zeros((step, 2), device=device)  # 边界坐标点
     x_boundary_fixed[:, 1] = torch.linspace(0, height, step, device=device)  # 生成 x=0 边界的坐标  --> [0, y]T
     x_boundary_fixed.requires_grad_(True)
@@ -245,7 +250,7 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
 # 主训练过程
 def train(maxiters, n, num_phi_train, step):
     model = PINN().to(device)  # 初始化PINN模型并移动到GPU
-    optimizer = optim.Adam(model.parameters(), lr=0.001)  # 使用Adam优化器
+    optimizer = optim.Adam(model.parameters(), lr=0.0001)  # 使用Adam优化器
     loss_history = []
 
     steps_count = maxiters // n  # 每次加点训练的次数
@@ -278,7 +283,7 @@ def train(maxiters, n, num_phi_train, step):
             x_interior_total.requires_grad_(True)
 
             for epoch in range(steps_count):
-                if epoch < steps_count * 0.999 + 1:
+                if epoch < steps_count * 0.995 + 1:
                     optimizer.zero_grad()
                     loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss, uv_loss = \
                         loss_fn(model, step, x_interior_total,
@@ -300,9 +305,9 @@ def train(maxiters, n, num_phi_train, step):
                               f'uv_loss: {uv_loss.item():.6f}')
 
                 else:
-                    optimizer = LBFGS(model.parameters(), lr=0.0001, max_iter=500, history_size=50,
-                                      tolerance_grad=0.0001 * np.finfo(float).eps,
-                                      tolerance_change=0.0001 * np.finfo(float).eps)  # 使用LBFGS优化器
+                    optimizer = LBFGS(model.parameters(), lr=0.001, max_iter=500, history_size=500,
+                                      tolerance_grad=0.001 * np.finfo(float).eps,
+                                      tolerance_change=0.001 * np.finfo(float).eps)  # 使用LBFGS优化器
 
                     def closure():
                         optimizer.zero_grad()
@@ -317,7 +322,7 @@ def train(maxiters, n, num_phi_train, step):
 
                     loss_history.append(loss.item())
 
-                    if epoch % num_print_epoch == 0:
+                    if epoch % 10 == 0:
                         print(f'Iteration {i + 1}/{n}, Epoch {epoch}, Loss: {loss.item():.5f}')
 
 
