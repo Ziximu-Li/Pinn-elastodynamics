@@ -9,7 +9,7 @@ import random
 
 seed = 111111
 E = 2.1 * 1e9  # 杨氏模量
-beta = 1.0 * 1e8
+beta = 3 * 1e6
 mu = 0.3  # 泊松比
 
 # 设置随机种子
@@ -58,11 +58,11 @@ class PINN(nn.Module):
         self._initialize_weights()
 
     def forward(self, x):
-        x = self.swish(self.fc1(x))  # 激活函数
-        x = self.swish(self.fc2(x))  # 激活函数
-        x = self.swish(self.fc3(x))  # 激活函数
-        x = self.swish(self.fc4(x))  # 激活函数
-        x = self.swish(self.fc5(x))  # 激活函数
+        x = self.softplus(self.fc1(x))  # 激活函数
+        x = self.softplus(self.fc2(x))  # 激活函数
+        x = self.softplus(self.fc3(x))  # 激活函数
+        x = self.softplus(self.fc4(x))  # 激活函数
+        x = self.softplus(self.fc5(x))  # 激活函数
         x = self.fc6(x)  # 输出层
 
         # 输出进行一个线性激活
@@ -78,25 +78,14 @@ class PINN(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)  # 初始化偏置为0
 
-# 待试验：先对输入归一[-1,1]，后再在损失函数部分输出的结果处反归一？
+
 # 如何将输出数据反归一？
 def normalize_data(data):
     data_normalized = data.clone()  # 先克隆数据，避免在原始数据上进行in-place操作
     data_normalized[:, 0] = data_normalized[:, 0] - 10
     data_normalized[:, 1] = data_normalized[:, 1] - 2.5
-    # data_normalized[:, :] = data_normalized[:, :] / 20
-    # data_normalized[:, 0] = data_normalized[:, 0]
-    # data_normalized[:, 1] = data_normalized[:, 1]
     return data_normalized
 
-def renormalize_data(data):
-    data_renormalized = data.clone()  # 先克隆数据，避免在原始数据上进行in-place操作
-    # data_renormalized[:, 0] = (data_renormalized[:, 0] + 1.0) * 10
-    # data_renormalized[:, 1] = (data_renormalized[:, 1] + 1.0) * 2.5
-    # data_renormalized = data_renormalized[:, :] * 20
-    # data_renormalized[:, 0] = data_renormalized[:, 0] + 10
-    # data_renormalized[:, 1] = data_renormalized[:, 1] + 2.5
-    return data_renormalized
 
 def generate_BC_training_data(length, height, step):
     # 固定端边界条件 (x = 0)    length = 20, height = 5, step = 200
@@ -104,6 +93,7 @@ def generate_BC_training_data(length, height, step):
     x_boundary_fixed = torch.zeros((step, 2), device=device)  # 边界坐标点
     x_boundary_fixed[:, 1] = torch.linspace(0, height, step, device=device)  # 生成 x=0 边界的坐标  --> [0, y]T
     x_boundary_fixed.requires_grad_(True)
+    
     y_boundary_fixed = torch.zeros((step, 2), device=device)  # 设置固定端的位移: y_boundary_fixed --> U and V (x = 0) = 0
 
     # 其他边界条件
@@ -157,18 +147,7 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
     # 将边界点加入内部点中，保证边界点同样满足弹性力学本构方程
     x_interior_loss_total = torch.cat((x_interior, x_boundary_fixed, x_boundary), dim=0)
     x_interior_loss_total.requires_grad_(True)
-
-    # 内部点+上下边界点 满足平衡方程 f=0
-    x_interior_without_F = torch.cat((x_interior, x_boundary[:2*step-4,]), dim=0)
-    x_interior_without_F.requires_grad_(True)
-
-    # 右侧边界点 施加载荷约束
-    x_interior_right = x_boundary[2*step-4:,]
-    x_interior_right.requires_grad_(True)
-
-    # 上下边界点，边界应力为0
-    x_boundary_up_down = x_boundary[: 2*step-4,]
-    x_boundary_up_down.requires_grad_(True)
+    x_interior_loss_total = x_interior_loss_total.to(device)
 
     # 计算损失
     x_interior_loss_total = normalize_data(x_interior_loss_total)
@@ -178,25 +157,23 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
 
     sigma_xx, sigma_yy, sigma_xy = calculate_sigma(u_pred, v_pred, x_interior_loss_total)
 
+    fxx_x_pred, fxy_x_pred, fxy_y_pred, fyy_y_pred = calculate_f(sigma_xx, sigma_yy, sigma_xy, x_interior_loss_total)
+
     # 本构损失
     phy_loss = (torch.mean((sigma_xx_pred - sigma_xx) ** 2) +
                 torch.mean((sigma_xy_pred - sigma_xy) ** 2) +
                 torch.mean((sigma_yy_pred - sigma_yy) ** 2))
 
     # 平衡方程损失
-    x_interior_without_F = normalize_data(x_interior_without_F)
-    pred_without_F = model(x_interior_without_F)
-    u_pred_without_F, v_pred_without_F = pred_without_F[:, 0], pred_without_F[:, 1]
-    sigma_xx_pred_without_F, sigma_yy_pred_without_F, sigma_xy_pred_without_F = \
-        pred_without_F[:, 2], pred_without_F[:, 3], pred_without_F[:, 4]
-
-    fxx_x, fxy_x, fxy_y, fyy_y = calculate_f(sigma_xx_pred_without_F, sigma_yy_pred_without_F, sigma_xy_pred_without_F, x_interior_without_F)
+    fxx_x = torch.cat((fxx_x_pred[:1000, ], fxx_x_pred[1200:1596,]), dim=0)
+    fxy_x = torch.cat((fxy_x_pred[:1000, ], fxy_x_pred[1200:1596,]), dim=0)
+    fxy_y = torch.cat((fxy_y_pred[:1000, ], fxy_y_pred[1200:1596,]), dim=0)
+    fyy_y = torch.cat((fyy_y_pred[:1000, ], fyy_y_pred[1200:1596,]), dim=0)
 
     balence_without_F_loss = (torch.mean((fxx_x + fxy_y) ** 2) + torch.mean((fxy_x + fyy_y) ** 2))
 
     # 右端载荷损失
-    x_interior_right = normalize_data(x_interior_right)
-    pred_right = model(x_interior_right)
+    pred_right = pred[1596:,]
     sigma_xx_pred_right, sigma_yy_pred_right, sigma_xy_pred_right = pred_right[:, 2], pred_right[:, 3], pred_right[:, 4]
 
     balence_F_loss = (torch.mean((sigma_xx_pred_right - y_boundary[:, 0]) ** 2) +
@@ -204,24 +181,21 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
                       torch.mean((sigma_xy_pred_right - y_boundary[:, 1]) ** 2))
 
     # 上下端应力损失
-    x_boundary_up_down = normalize_data(x_boundary_up_down)
-    pred_up_down = model(x_boundary_up_down)
+    pred_up_down = pred[1200:1596,]
     sigma_xx_pred_up_down, sigma_yy_pred_up_down, sigma_xy_pred_up_down = pred_up_down[:, 2], pred_up_down[:, 3], pred_up_down[:, 4]
 
     balence_up_down_F_loss = (torch.mean((sigma_yy_pred_up_down) ** 2) + torch.mean((sigma_xy_pred_up_down) ** 2))
 
     # 固定端条件损失
-    x_boundary_fixed = normalize_data(x_boundary_fixed)
-    fixed_pred = model(x_boundary_fixed)
-    fixed_pred.requires_grad_(True)
+    fixed_pred = pred[1000:1200,]
 
     u_pred_fixed = fixed_pred[:, 0] * beta
     v_pred_fixed = fixed_pred[:, 1] * beta
 
     fixed_loss = (torch.mean((u_pred_fixed) ** 2) + torch.mean((v_pred_fixed) ** 2))
 
-    # 强制性使得横向位移为正
-    uv_loss = (torch.sum(torch.clamp(u_pred * beta, max=0.0) ** 2))
+    # 强制性使得位移为正
+    uv_loss = (torch.sum(torch.clamp(u_pred * beta, max=0.0) ** 2) + torch.sum(torch.clamp(v_pred * beta, max=0.0) ** 2))
 
     lambda_balence = 1  # 平衡方程条件权重
     lambda_fixed = 1  # 固定端边界条件权重
@@ -234,15 +208,6 @@ def loss_fn(model, step, x_interior, x_boundary_fixed, y_boundary_fixed, x_bound
                  lambda_BC * (balence_F_loss + balence_up_down_F_loss) +
                  lambda_phy * phy_loss +
                  lambda_uv * uv_loss)
-
-    # if epoch > 10000 * 0.999 + 1:
-    #     print(f'Iteration {epoch + 1}/{n}, Epoch {epoch}, '
-    #           f'Loss: {PINN_loss.item():.6f}, '
-    #           f'balence_without_F_loss: {balence_without_F_loss.item():.6f}, '
-    #           f'fixed_loss: {fixed_loss.item():.6f}, '
-    #           f'balence_F_loss: {balence_F_loss + balence_up_down_F_loss.item():.6f}, '
-    #           f'phy_loss: {phy_loss.item():.6f}, '
-    #           f'uv_loss: {uv_loss.item():.6f}')
 
     return (PINN_loss, balence_without_F_loss, fixed_loss, balence_F_loss + balence_up_down_F_loss, phy_loss, uv_loss)
 
@@ -283,7 +248,7 @@ def train(maxiters, n, num_phi_train, step):
             x_interior_total.requires_grad_(True)
 
             for epoch in range(steps_count):
-                if epoch < steps_count * 0.995 + 1:
+                if epoch < 10000:
                     optimizer.zero_grad()
                     loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss, uv_loss = \
                         loss_fn(model, step, x_interior_total,
@@ -303,11 +268,12 @@ def train(maxiters, n, num_phi_train, step):
                               f'balence_F_loss: {balence_F_loss.item():.6f}, '
                               f'phy_loss: {phy_loss.item():.6f}, '
                               f'uv_loss: {uv_loss.item():.6f}')
-
                 else:
-                    optimizer = LBFGS(model.parameters(), lr=0.001, max_iter=500, history_size=500,
-                                      tolerance_grad=0.001 * np.finfo(float).eps,
-                                      tolerance_change=0.001 * np.finfo(float).eps)  # 使用LBFGS优化器
+                    optimizer = torch.optim.LBFGS(model.parameters(), lr=1.0,
+                                                  max_iter=50000, max_eval=50000,
+                                                  history_size=50, tolerance_grad=1e-7,
+                                                  tolerance_change=1.0 * np.finfo(float).eps,
+                                                  line_search_fn="strong_wolfe",)
 
                     def closure():
                         optimizer.zero_grad()
@@ -322,7 +288,7 @@ def train(maxiters, n, num_phi_train, step):
 
                     loss_history.append(loss.item())
 
-                    if epoch % 10 == 0:
+                    if epoch % 100 == 0:
                         print(f'Iteration {i + 1}/{n}, Epoch {epoch}, Loss: {loss.item():.5f}')
 
 
@@ -330,7 +296,6 @@ def train(maxiters, n, num_phi_train, step):
         print(f'Step {i + 1}/{n}, Time Elapsed: {step_train_time:.2f}s')
 
     return model, loss_history
-
 
 # 绘制最终应力和位移云图
 def plot_results(model, loss_history):
@@ -370,11 +335,6 @@ def plot_results(model, loss_history):
     calculate_sigma_xx = (C11 * epsilon_xx + C12 * epsilon_yy)
     calculate_sigma_yy = (C12 * epsilon_xx + C11 * epsilon_yy)
     calculate_sigma_xy = (C33 * epsilon_xy)
-    #
-    # fxx_x_calculate = torch.autograd.grad(calculate_sigma_xx, xy_tensor, grad_outputs=torch.ones_like(calculate_sigma_xx), create_graph=True)[0][:, 0]
-    # fxy_x_calculate = torch.autograd.grad(calculate_sigma_xy, xy_tensor, grad_outputs=torch.ones_like(calculate_sigma_xy), create_graph=True)[0][:, 0]
-    # fxy_y_calculate = torch.autograd.grad(calculate_sigma_xy, xy_tensor, grad_outputs=torch.ones_like(calculate_sigma_xy), create_graph=True)[0][:, 1]
-    # fyy_y_calculate = torch.autograd.grad(calculate_sigma_yy, xy_tensor, grad_outputs=torch.ones_like(calculate_sigma_yy), create_graph=True)[0][:, 1]
 
     U = pred[:, 0].reshape(1000, 1000).detach().cpu().numpy()
     V = pred[:, 1].reshape(1000, 1000).detach().cpu().numpy()
@@ -390,11 +350,6 @@ def plot_results(model, loss_history):
     fxy_x = fxy_x.reshape(1000, 1000).detach().cpu().numpy()
     fxy_y = fxy_y.reshape(1000, 1000).detach().cpu().numpy()
     fyy_y = fyy_y.reshape(1000, 1000).detach().cpu().numpy()
-
-    # fxx_x_calculate = fxx_x_calculate.reshape(1000, 1000).detach().cpu().numpy()
-    # fxy_x_calculate = fxy_x_calculate.reshape(1000, 1000).detach().cpu().numpy()
-    # fxy_y_calculate = fxy_y_calculate.reshape(1000, 1000).detach().cpu().numpy()
-    # fyy_y_calculate = fyy_y_calculate.reshape(1000, 1000).detach().cpu().numpy()
 
     # 绘制位移云图 U
     plt.figure()
@@ -441,35 +396,19 @@ def plot_results(model, loss_history):
     plt.ylabel('Height')
     plt.show()
 
-    # 绘制平衡方程云图
-    plt.figure()
-    plt.imshow(fxx_x + fxy_y, extent=(0, 20, 0, 5), origin='lower', cmap='jet')
-    plt.colorbar()
-    plt.title('fxx_x + fxy_y')
-    plt.xlabel('Length')
-    plt.ylabel('Height')
-    plt.show()
-
-    plt.figure()
-    plt.imshow(fxy_x + fyy_y, extent=(0, 20, 0, 5), origin='lower', cmap='jet')
-    plt.colorbar()
-    plt.title('fxy_x + fyy_y')
-    plt.xlabel('Length')
-    plt.ylabel('Height')
-    plt.show()
-
+    # # 绘制平衡方程云图
     # plt.figure()
-    # plt.imshow(fxx_x_calculate + fxy_y_calculate, extent=(0, 20, 0, 5), origin='lower', cmap='jet')
+    # plt.imshow(fxx_x + fxy_y, extent=(0, 20, 0, 5), origin='lower', cmap='jet')
     # plt.colorbar()
-    # plt.title('fxx_x_calculate + fxy_y_calculate')
+    # plt.title('fxx_x + fxy_y')
     # plt.xlabel('Length')
     # plt.ylabel('Height')
     # plt.show()
     #
     # plt.figure()
-    # plt.imshow(fxy_x_calculate + fyy_y_calculate, extent=(0, 20, 0, 5), origin='lower', cmap='jet')
+    # plt.imshow(fxy_x + fyy_y, extent=(0, 20, 0, 5), origin='lower', cmap='jet')
     # plt.colorbar()
-    # plt.title('fxy_x_calculate + fyy_y_calculate')
+    # plt.title('fxy_x + fyy_y')
     # plt.xlabel('Length')
     # plt.ylabel('Height')
     # plt.show()
@@ -485,7 +424,7 @@ def plot_results(model, loss_history):
 if __name__ == "__main__":
     num_phi_train = 1000  # 总加点个数
     n = 1  # 加点轮次
-    maxiters = 10000  # 总共训练的次数
+    maxiters = 10200  # 总共训练的次数
     step = 200  # 定义边界加点个数
 
     start_time = time.time()
