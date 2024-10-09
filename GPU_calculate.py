@@ -7,9 +7,9 @@ import torch.optim as optim
 from torch.optim import LBFGS
 import random
 
-seed = 111111
+seed = 12345
 E = 2.1 * 1e9  # 杨氏模量
-beta = 1 * 1e7
+beta = 1 * 1e8
 mu = 0.3  # 泊松比
 
 # 悬臂梁尺寸
@@ -196,9 +196,9 @@ def loss_fn(model, step, step_bc, inside, boundary, boundary_stress):
     return (PINN_loss, balence_without_F_loss, fixed_loss, balence_F_loss + balence_up_down_F_loss, phy_loss, uv_loss)
 
 # 主训练过程
-def train(maxiters, step, step_bc):
+def train(maxiters, adamsnum, step, step_bc):
     model = PINN().to(device)  # 初始化PINN模型并移动到GPU
-    optimizer = optim.Adam(model.parameters(),lr=0.0001)  # 使用Adam优化器
+    optimizer = optim.Adam(model.parameters(),lr=0.01)  # 使用Adam优化器
     loss_history = []
 
     # -------------------------- 设置训练集 -------------------------- #
@@ -239,7 +239,7 @@ def train(maxiters, step, step_bc):
     adams_start_time = time.time()
 
     for epoch in range(maxiters):
-        if epoch < 1000:
+        if epoch < adamsnum + 1:
             optimizer.zero_grad()
             loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss, uv_loss = \
                 loss_fn(model, step, step_bc, inside, boundary, boundary_stress)
@@ -249,7 +249,7 @@ def train(maxiters, step, step_bc):
 
             loss_history.append(loss.item())
 
-            if epoch % 1000 == 0:
+            if epoch % 200 == 0:
                 step_train_time = time.time() - step_start_time
                 print(f'Epoch {epoch}, '
                       f'Loss: {loss.item():.6f}, '
@@ -260,58 +260,33 @@ def train(maxiters, step, step_bc):
                       f'uv_loss: {uv_loss.item():.6f}，'
                       f'Step_Time: {step_train_time:.2f}s')
                 step_start_time = time.time()
+
+            if epoch == adamsnum:
+                adams_time = time.time() - adams_start_time
+                print(f'Adams time: {adams_time:.2f}s')
         else:
-            if epoch == 1000:
+            optimizer = torch.optim.LBFGS(model.parameters(), lr=1.0,
+                                          max_iter=1000,
+                                          history_size=10,
+                                          tolerance_grad=0.00001 * np.finfo(float).eps)
+
+            def closure():
                 optimizer.zero_grad()
                 loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss, uv_loss = \
                     loss_fn(model, step, step_bc, inside, boundary, boundary_stress)
-                loss.backward(retain_graph=True)
-                nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # 梯度裁剪
-                optimizer.step()
-                loss_history.append(loss.item())
+                loss.backward()
+                return loss
 
+            loss = optimizer.step(closure)  # LBFGS优化
+
+            loss_history.append(loss.item())
+
+            if epoch % 10 == 0:
                 step_train_time = time.time() - step_start_time
                 print(f'Epoch {epoch}, '
                       f'Loss: {loss.item():.6f}, '
-                      f'balence_without_F_loss: {balence_without_F_loss.item():.6f}, '
-                      f'fixed_loss: {fixed_loss.item():.6f}, '
-                      f'balence_F_loss: {balence_F_loss.item():.6f}, '
-                      f'phy_loss: {phy_loss.item():.6f}, '
-                      f'uv_loss: {uv_loss.item():.6f}，'
                       f'Step_Time: {step_train_time:.2f}s')
                 step_start_time = time.time()
-
-                adams_time = time.time() - adams_start_time
-                print(f'Adams time: {adams_time:.2f}s')
-            else:
-                optimizer = torch.optim.LBFGS(model.parameters(), lr=1.0,
-                                              max_iter=5000, max_eval=5000,
-                                              history_size=50, tolerance_grad=1e-7,
-                                              tolerance_change=1.0 * np.finfo(float).eps,
-                                              line_search_fn="strong_wolfe",)
-
-                def closure():
-                    optimizer.zero_grad()
-                    loss, balence_without_F_loss, fixed_loss, balence_F_loss, phy_loss, uv_loss = \
-                        loss_fn(model, step, step_bc, inside, boundary, boundary_stress)
-                    loss.backward()
-                    return loss
-
-                loss = optimizer.step(closure)  # LBFGS优化
-
-                loss_history.append(loss.item())
-
-                if epoch % 100 == 0:
-                    step_train_time = time.time() - step_start_time
-                    print(f'Epoch {epoch}, '
-                          f'Loss: {loss.item():.6f}, '
-                          f'balence_without_F_loss: {balence_without_F_loss.item():.6f}, '
-                          f'fixed_loss: {fixed_loss.item():.6f}, '
-                          f'balence_F_loss: {balence_F_loss.item():.6f}, '
-                          f'phy_loss: {phy_loss.item():.6f}, '
-                          f'uv_loss: {uv_loss.item():.6f}，'
-                          f'Step_Time: {step_train_time:.2f}s')
-                    step_start_time = time.time()
 
     return model, loss_history
 
@@ -423,12 +398,13 @@ def plot_results(model, loss_history):
     plt.show()
 
 if __name__ == "__main__":
-    maxiters = 1500  # 总共训练的次数
+    maxiters = 600  # 总共训练的次数
     step = 0.25  # 定义内部加点
     step_bc = 0.1  # 定义边界加点
+    adamsnum = 500
 
     start_time = time.time()
-    model, loss_history = train(maxiters, step, step_bc)
+    model, loss_history = train(maxiters, adamsnum, step, step_bc)
 
     elapsed_time = time.time() - start_time
     print(f'Time Elapsed: {elapsed_time:.2f}s')
