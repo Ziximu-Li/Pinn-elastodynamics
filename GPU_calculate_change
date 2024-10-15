@@ -7,7 +7,7 @@ import torch.optim as optim
 from torch.optim import LBFGS
 import random
 
-seed = 12345
+seed = 123456
 E = 2.1 * 1e9  # 杨氏模量
 mu = 0.3  # 泊松比
 beta = 1.0 * 1e8
@@ -63,9 +63,10 @@ class PINN(nn.Module):
         self.step = 0.25  # 定义内部加点
         self.step_bc = 0.1  # 定义边界加点
 
-        self.maxiters = 10000
-        # self.adamsnum = 5000
-        self.adamsnum = 3000
+        # self.maxiters = 15000
+        # self.adamsnum = 10000
+        self.maxiters = 30000
+        self.adamsnum = 5000
 
         self.step_start_time = time.time()
         self.adams_start_time = time.time()
@@ -112,8 +113,7 @@ class PINN(nn.Module):
         # 设置lbfgs优化器
         self.lbfgs = torch.optim.LBFGS(
             self.parameters(),
-            # lr=1.0,
-            lr=0.1,
+            lr=1.0,
             max_iter=5000,
             max_eval=5000,
             history_size=50,
@@ -124,7 +124,6 @@ class PINN(nn.Module):
 
         # 设置adam优化器
         self.adam = torch.optim.Adam(self.parameters(),lr=0.01)
-        # self.adam = torch.optim.Adam(self.parameters(),lr=0.001)
 
     def forward(self, x):
         x = x.to(device)  # 将输入张量移动到 GPU
@@ -233,8 +232,8 @@ class PINN(nn.Module):
 
         # 右端载荷损失
         pred_right = pred[right_point:, ]
-        sigma_xx_pred_right, sigma_yy_pred_right, sigma_xy_pred_right = pred_right[:, 2], pred_right[:, 3], pred_right[
-                                                                                                            :, 4]
+        sigma_xx_pred_right, sigma_yy_pred_right, sigma_xy_pred_right \
+            = pred_right[:, 2], pred_right[:, 3], pred_right[:, 4]
 
         balence_F_loss = (torch.mean((sigma_xx_pred_right - self.boundary_stress) ** 2) +
                           torch.mean(sigma_yy_pred_right ** 2) +
@@ -242,8 +241,8 @@ class PINN(nn.Module):
 
         # 上下端应力损失
         pred_up_down = pred[up_point: right_point, ]
-        sigma_xx_pred_up_down, sigma_yy_pred_up_down, sigma_xy_pred_up_down = pred_up_down[:, 2], pred_up_down[:,
-                                                                                                  3], pred_up_down[:, 4]
+        sigma_xx_pred_up_down, sigma_yy_pred_up_down, sigma_xy_pred_up_down \
+            = pred_up_down[:, 2], pred_up_down[:, 3], pred_up_down[:, 4]
         balence_up_down_F_loss = (torch.mean((sigma_yy_pred_up_down) ** 2) + torch.mean((sigma_xy_pred_up_down) ** 2))
 
         # 固定端条件损失
@@ -423,7 +422,7 @@ class PINN(nn.Module):
 
         # 绘制损失函数曲线
         plt.figure()
-        plt.plot(self.loss_history[int(self.adamsnum / 5):])
+        plt.plot(self.loss_history[:])
         plt.title('Loss Function Curve')
         plt.xlabel('Iterations')
         plt.ylabel('Loss')
@@ -461,7 +460,7 @@ pinn = PINN()
 pinn.train()
 
 # 将模型保存到文件
-torch.save(pinn, '../model.pth')
+torch.save(pinn, '../5outputModel.pth')
 total_time = time.time() - start_time
 print(f'Time Elapsed: {total_time:.2f}s')
 
